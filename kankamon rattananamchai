@@ -1,0 +1,243 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Cpu, 
+  Send, 
+  Bot, 
+  User, 
+  Terminal, 
+  Info, 
+  Code, 
+  ExternalLink,
+  Lightbulb,
+  Thermometer,
+  Waves,
+  Zap
+} from 'lucide-react';
+
+const apiKey = ""; // API Key is provided by the environment
+
+const App = () => {
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      content: 'สวัสดีครับ! ผมคือผู้ช่วยอัจฉริยะสำหรับการเขียนโปรแกรม Arduino คุณต้องการควบคุมเซนเซอร์ตัวไหน หรืออยากให้ช่วยเขียนโค้ดอะไร บอกมาได้เลยครับ (เช่น "สอนใช้ DHT11" หรือ "อยากเปิดปิดไฟด้วยเซนเซอร์แสง")'
+    }
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const quickActions = [
+    { label: 'วัดอุณหภูมิ (DHT11/22)', icon: <Thermometer size={16} />, query: 'ขอโค้ด Arduino สำหรับเซนเซอร์ DHT11 พร้อมคำอธิบาย' },
+    { label: 'วัดระยะทาง (Ultrasonic)', icon: <Waves size={16} />, query: 'ขอโค้ดใช้ HC-SR04 วัดระยะทางและแสดงผลผ่าน Serial Monitor' },
+    { label: 'เซนเซอร์แสง (LDR)', icon: <Lightbulb size={16} />, query: 'ขอวิธีใช้ LDR ควบคุม LED เปิดปิดตามความสว่าง' },
+    { label: 'เซนเซอร์ตรวจจับการเคลื่อนไหว', icon: <Zap size={16} />, query: 'สอนใช้ PIR Sensor ตรวจจับคน' },
+  ];
+
+  const callGemini = async (userQuery) => {
+    setIsLoading(true);
+    const systemPrompt = `You are an expert Arduino tutor and developer. 
+    Your goal is to provide clear, well-commented C++ code for Arduino.
+    When a user asks about a sensor:
+    1. Provide a brief explanation of the sensor.
+    2. List the wiring connections (e.g., VCC -> 5V, GND -> GND).
+    3. Provide a complete, runnable Arduino Sketch (.ino).
+    4. Use Thai language for explanations and comments in the code.
+    5. Be encouraging and helpful.`;
+
+    try {
+      let retryCount = 0;
+      const maxRetries = 5;
+      let response;
+
+      while (retryCount < maxRetries) {
+        try {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: userQuery }] }],
+              systemInstruction: { parts: [{ text: systemPrompt }] }
+            })
+          });
+
+          if (response.ok) break;
+          const delay = Math.pow(2, retryCount) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+          retryCount++;
+        } catch (err) {
+          retryCount++;
+          if (retryCount === maxRetries) throw err;
+        }
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "ขออภัยครับ ไม่สามารถดึงข้อมูลได้ในขณะนี้";
+      
+      setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+    } catch (error) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้งครับ' }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSend = async (textToSubmit = input) => {
+    if (!textToSubmit.trim() || isLoading) return;
+
+    const userMessage = { role: 'user', content: textToSubmit };
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    
+    await callGemini(textToSubmit);
+  };
+
+  const formatMessage = (content) => {
+    // Basic Markdown-like formatting for code blocks
+    const parts = content.split(/(```[\s\S]*?```)/g);
+    return parts.map((part, index) => {
+      if (part.startsWith('```')) {
+        const code = part.replace(/```(cpp|arduino|c\+\+)?/g, '').replace(/```/g, '').trim();
+        return (
+          <div key={index} className="my-4 rounded-lg overflow-hidden border border-slate-700">
+            <div className="bg-slate-800 px-4 py-2 flex justify-between items-center border-b border-slate-700">
+              <span className="text-xs font-mono text-slate-400">Arduino Sketch</span>
+              <button 
+                onClick={() => {
+                  const el = document.createElement('textarea');
+                  el.value = code;
+                  document.body.appendChild(el);
+                  el.select();
+                  document.execCommand('copy');
+                  document.body.removeChild(el);
+                }}
+                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                คัดลอกโค้ด
+              </button>
+            </div>
+            <pre className="p-4 bg-slate-900 text-green-400 font-mono text-sm overflow-x-auto">
+              <code>{code}</code>
+            </pre>
+          </div>
+        );
+      }
+      return <div key={index} className="whitespace-pre-wrap mb-2 leading-relaxed">{part}</div>;
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-200">
+            <Cpu size={24} />
+          </div>
+          <div>
+            <h1 className="font-bold text-lg text-slate-800 leading-none">Arduino Sensor Buddy</h1>
+            <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+              พร้อมช่วยเหลือคุณ
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Chat Area */}
+      <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+        <div className="max-w-4xl mx-auto space-y-6">
+          {messages.map((msg, idx) => (
+            <div 
+              key={idx} 
+              className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+            >
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 ${
+                msg.role === 'user' ? 'bg-slate-800 text-white' : 'bg-blue-100 text-blue-600'
+              }`}>
+                {msg.role === 'user' ? <User size={18} /> : <Bot size={18} />}
+              </div>
+              <div className={`max-w-[85%] px-5 py-3 rounded-2xl shadow-sm ${
+                msg.role === 'user' 
+                  ? 'bg-blue-600 text-white rounded-tr-none' 
+                  : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'
+              }`}>
+                {formatMessage(msg.content)}
+              </div>
+            </div>
+          ))}
+          
+          {isLoading && (
+            <div className="flex gap-4">
+              <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                <Bot size={18} />
+              </div>
+              <div className="bg-white border border-slate-200 p-4 rounded-2xl rounded-tl-none flex items-center gap-2">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:-.3s]"></div>
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce [animation-delay:-.5s]"></div>
+                </div>
+                <span className="text-sm text-slate-500 italic">กำลังคิดคำตอบ...</span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </main>
+
+      {/* Quick Actions & Input */}
+      <footer className="bg-white border-t border-slate-200 p-4 shadow-inner">
+        <div className="max-w-4xl mx-auto">
+          {/* Quick Action Chips */}
+          <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide no-scrollbar">
+            {quickActions.map((action, i) => (
+              <button
+                key={i}
+                onClick={() => handleSend(action.query)}
+                disabled={isLoading}
+                className="flex-shrink-0 flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full text-sm font-medium transition-all active:scale-95 border border-slate-200"
+              >
+                {action.icon}
+                {action.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Input Box */}
+          <div className="relative flex items-center gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+              placeholder="ถามคำถามเกี่ยวกับ Arduino หรือเลือกจากด้านบน..."
+              disabled={isLoading}
+              className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-5 py-4 pr-14 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-800 disabled:opacity-50"
+            />
+            <button
+              onClick={() => handleSend()}
+              disabled={!input.trim() || isLoading}
+              className="absolute right-2 p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all disabled:opacity-50 disabled:bg-slate-400 shadow-lg shadow-blue-200 active:scale-90"
+            >
+              <Send size={20} />
+            </button>
+          </div>
+          <p className="text-[10px] text-center text-slate-400 mt-3 uppercase tracking-widest font-semibold">
+            Powered by Gemini 2.5 Flash
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default App;
